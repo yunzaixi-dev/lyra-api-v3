@@ -13,6 +13,8 @@ import albumentations as A
 from albumentations.pytorch import ToTensorV2
 from typing import Dict, List, Tuple, Optional
 import matplotlib.pyplot as plt
+import random
+import collections
 
 
 class ADE20KDataset(Dataset):
@@ -25,7 +27,8 @@ class ADE20KDataset(Dataset):
         transform: Optional[A.Compose] = None,
         image_size: Tuple[int, int] = (256, 256),
         mode: str = "train",
-        filter_empty_samples: bool = True
+        filter_empty_samples: bool = True,
+        shuffle_samples: bool = True
     ):
         self.data_dir = data_dir
         self.target_classes = target_classes
@@ -33,7 +36,9 @@ class ADE20KDataset(Dataset):
         self.image_size = image_size
         self.split = "training" if mode == "train" else "validation"
         self.filter_empty_samples = filter_empty_samples
+        self.shuffle_samples = shuffle_samples
         self.samples = []
+        self.samples_by_class = collections.defaultdict(list)  # 按类别分组的样本
         
         # 创建类别到索引的映射
         self.class_to_idx = {cls: idx for idx, cls in enumerate(target_classes)}
@@ -98,6 +103,11 @@ class ADE20KDataset(Dataset):
         # 根据筛选设置选择最终样本
         self.samples = valid_samples
         
+        # 如果启用洗牌，按类别分组样本
+        if self.shuffle_samples:
+            self._group_samples_by_class()
+            self._shuffle_samples()
+        
         # 输出统计信息
         total_samples = len(all_samples)
         valid_samples_count = len(valid_samples)
@@ -111,6 +121,87 @@ class ADE20KDataset(Dataset):
             print(f"  🗑️  过滤掉的空样本: {filtered_count:,} ({filter_rate:.1f}%)")
         else:
             print(f"  📝 使用所有样本: {valid_samples_count:,}")
+        
+        if self.shuffle_samples:
+            print(f"  🔀 启用样本洗牌，按类别平衡分布")
+    
+    def _group_samples_by_class(self):
+        """按类别分组样本，用于平衡洗牌"""
+        print("🔍 按类别分析样本...")
+        self.samples_by_class = collections.defaultdict(list)
+        
+        # 获取统一的ADE20K标注名称映射
+        ade20k_name_to_target = self._get_ade20k_mapping()
+        
+        for sample in self.samples:
+            try:
+                # 加载标注文件分析类别
+                annotation = self._load_annotation(sample['json_path'])
+                objects = annotation.get('annotation', {}).get('object', [])
+                
+                sample_classes = set()
+                for obj in objects:
+                    obj_name = obj.get('name', '').strip()
+                    if not obj_name:
+                        continue
+                    
+                    # 查找匹配的目标类别
+                    target_class = ade20k_name_to_target.get(obj_name)
+                    if not target_class:
+                        target_class = ade20k_name_to_target.get(obj_name.lower())
+                    
+                    if target_class and target_class in self.class_to_idx:
+                        sample_classes.add(target_class)
+                
+                # 将样本添加到每个包含的类别中
+                for class_name in sample_classes:
+                    self.samples_by_class[class_name].append(sample)
+                    
+            except Exception as e:
+                # 如果解析失败，将样本归为通用类别
+                self.samples_by_class['background'].append(sample)
+        
+        # 输出每个类别的样本数量
+        print("📊 各类别样本统计:")
+        for class_name in sorted(self.samples_by_class.keys()):
+            count = len(self.samples_by_class[class_name])
+            print(f"  {class_name}: {count:,} 个样本")
+    
+    def _shuffle_samples(self):
+        """使用洗牌算法重新排列样本，确保批次间类别平衡"""
+        if not self.samples_by_class:
+            print("⚠️  没有按类别分组的样本，使用简单随机洗牌")
+            random.shuffle(self.samples)
+            return
+        
+        print("🔀 执行平衡洗牌算法...")
+        
+        # 获取所有类别及其样本数量
+        class_samples = [(class_name, samples) for class_name, samples in self.samples_by_class.items()]
+        
+        # 对每个类别内部洗牌
+        for class_name, samples in class_samples:
+            random.shuffle(samples)
+        
+        # 使用轮询方式重新排列样本，确保类别分布均匀
+        shuffled_samples = []
+        max_samples = max(len(samples) for _, samples in class_samples) if class_samples else 0
+        
+        for i in range(max_samples):
+            for class_name, samples in class_samples:
+                if i < len(samples):
+                    shuffled_samples.append(samples[i])
+        
+        # 最后再次随机洗牌以避免完全规律的模式
+        random.shuffle(shuffled_samples)
+        
+        self.samples = shuffled_samples
+        print(f"✅ 洗牌完成，重排了 {len(shuffled_samples):,} 个样本")
+    
+    def shuffle_for_new_epoch(self):
+        """为新的epoch重新洗牌"""
+        if self.shuffle_samples and hasattr(self, 'samples_by_class'):
+            self._shuffle_samples()
     
     def _sample_has_target_classes(self, sample: dict) -> bool:
         """检查样本是否包含目标类别"""
@@ -119,58 +210,8 @@ class ADE20KDataset(Dataset):
             annotation = self._load_annotation(sample['json_path'])
             objects = annotation.get('annotation', {}).get('object', [])
             
-            # 使用与_create_mask相同的映射逻辑
-            ade20k_name_to_target = {
-                # Person类别
-                'person, individual, someone, somebody, mortal, soul': 'person',
-                'person': 'person', 'individual': 'person', 'human': 'person',
-                'man': 'person', 'woman': 'person', 'child': 'person', 'people': 'person',
-                
-                # Sky类别
-                'sky': 'sky',
-                
-                # Tree类别
-                'tree': 'tree', 'palm, palm tree': 'tree', 'palm tree': 'tree', 'palm': 'tree',
-                
-                # Rock类别
-                'rock, stone': 'rock', 'rock': 'rock', 'stone': 'rock', 'stones': 'rock', 'boulder': 'rock',
-                
-                # Bush类别
-                'shrub, bush': 'bush', 'bush': 'bush', 'shrub': 'bush', 'bushes': 'bush', 'ground shrubs': 'bush',
-                
-                # Grass类别
-                'grass': 'grass', 'lawn': 'grass', 'turf': 'grass',
-                
-                # Dog类别
-                'dog, domestic dog, canis familiaris': 'dog', 'dog': 'dog', 'dogs': 'dog', 'puppy': 'dog',
-                
-                # Cat类别
-                'cat': 'cat', 'cats': 'cat', 'kitten': 'cat',
-                
-                # Bird类别
-                'bird': 'bird', 'birds': 'bird',
-                
-                # Duck类别
-                'duck': 'duck', 'ducks': 'duck',
-                
-                # Clouds类别
-                'cloud': 'clouds', 'clouds': 'clouds',
-                
-                # Hill类别
-                'hill': 'hill', 'hills': 'hill', 'mound': 'hill',
-                
-                # Leaf类别
-                'leaf, leafage, foliage': 'leaf', 'leaf': 'leaf', 'leaves': 'leaf', 'foliage': 'leaf',
-                
-                # River类别
-                'river': 'river', 'stream': 'river', 'creek': 'river', 'brook': 'river',
-                
-                # Lake类别
-                'lake': 'lake', 'pond': 'lake', 'pond water': 'lake', 'reservoir': 'lake',
-                
-                # Flower类别
-                'flower': 'flower', 'flowers': 'flower', 'blossom': 'flower', 'bloom': 'flower', 'dried flowers': 'flower',
-            }
+            # 获取统一的ADE20K标注名称映射
+            ade20k_name_to_target = self._get_ade20k_mapping()
             
             # 检查是否有任何目标类别
             for obj in objects:
@@ -194,30 +235,9 @@ class ADE20KDataset(Dataset):
             # 如果处理失败，保守地保留样本
             return True
     
-    def _load_annotation(self, json_path: str) -> Dict:
-        """加载标注文件"""
-        try:
-            with open(json_path, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except UnicodeDecodeError:
-            try:
-                # 尝试其他编码
-                with open(json_path, 'r', encoding='latin-1') as f:
-                    return json.load(f)
-            except Exception:
-                # 如果仍然失败，返回空标注
-                return {'annotation': {'object': []}}
-    
-    def _create_mask(self, annotation: Dict, seg_image: np.ndarray) -> np.ndarray:
-        """根据标注创建目标类别的掩码 - 针对ADE20K复杂标注名称优化"""
-        h, w = seg_image.shape[:2]
-        mask = np.zeros((h, w), dtype=np.uint8)
-
-        # 获取标注中的所有对象
-        objects = annotation.get('annotation', {}).get('object', [])
-
-        # 基于分析结果创建精确的ADE20K标注名称映射
-        ade20k_name_to_target = {
+    def _get_ade20k_mapping(self) -> Dict[str, str]:
+        """获取统一的ADE20K标注名称到目标类别的映射"""
+        return {
             # Person类别
             'person, individual, someone, somebody, mortal, soul': 'person',
             'person': 'person',
@@ -309,6 +329,31 @@ class ADE20KDataset(Dataset):
             'bloom': 'flower',
             'dried flowers': 'flower',
         }
+
+    def _load_annotation(self, json_path: str) -> Dict:
+        """加载标注文件"""
+        try:
+            with open(json_path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except UnicodeDecodeError:
+            try:
+                # 尝试其他编码
+                with open(json_path, 'r', encoding='latin-1') as f:
+                    return json.load(f)
+            except Exception:
+                # 如果仍然失败，返回空标注
+                return {'annotation': {'object': []}}
+    
+    def _create_mask(self, annotation: Dict, seg_image: np.ndarray) -> np.ndarray:
+        """根据标注创建目标类别的掩码 - 针对ADE20K复杂标注名称优化"""
+        h, w = seg_image.shape[:2]
+        mask = np.zeros((h, w), dtype=np.uint8)
+
+        # 获取标注中的所有对象
+        objects = annotation.get('annotation', {}).get('object', [])
+
+        # 获取统一的ADE20K标注名称映射
+        ade20k_name_to_target = self._get_ade20k_mapping()
 
         for obj in objects:
             obj_name = obj.get('name', '').strip()

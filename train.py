@@ -285,6 +285,10 @@ class Trainer:
         for epoch in range(self.epoch, self.config['training']['epochs']):
             self.epoch = epoch
             
+            # 为新epoch重新洗牌训练数据
+            if hasattr(self.train_loader.dataset, 'shuffle_for_new_epoch'):
+                self.train_loader.dataset.shuffle_for_new_epoch()
+            
             # 训练
             train_loss = self.train_epoch()
             
