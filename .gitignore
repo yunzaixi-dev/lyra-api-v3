@@ -1,1 +1,10 @@
 images/
+*.pyc
+__pycache__/
+.venv/
+.env
+*.log
+checkpoints/
+runs/
+*.pt
+*.pth

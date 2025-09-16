@@ -1,0 +1,38 @@
+{
+  "data": {
+    "data_dir": "images",
+    "image_size": [256, 256],
+    "train_ratio": 0.8,
+    "num_workers": 4
+  },
+  "model": {
+    "architecture": "deeplabv3plus",
+    "encoder_name": "resnet50",
+    "encoder_weights": "imagenet",
+    "in_channels": 3,
+    "activation": null,
+    "multiscale": false,
+    "scales": [0.5, 1.0, 1.5]
+  },
+  "training": {
+    "epochs": 50,
+    "batch_size": 8,
+    "learning_rate": 0.001,
+    "weight_decay": 0.0001,
+    "momentum": 0.9,
+    "optimizer": "adam",
+    "scheduler": "cosine",
+    "step_size": 30,
+    "gamma": 0.1,
+    "patience": 10,
+    "loss_type": "combined",
+    "ce_weight": 1.0,
+    "dice_weight": 1.0,
+    "focal_weight": 0.0,
+    "use_class_weights": false,
+    "vis_interval": 10
+  },
+  "checkpoint_dir": "checkpoints",
+  "log_dir": "runs",
+  "output_dir": "outputs"
+}
