@@ -1,6 +1,6 @@
 {
   "data": {
-    "data_dir": "images",
+    "data_dir": "ADE20K",
     "image_size": [256, 256],
     "train_ratio": 0.8,
     "num_workers": 4

@@ -30,7 +30,7 @@ class ADE20KDataset(Dataset):
         self.target_classes = target_classes
         self.transform = transform
         self.image_size = image_size
-        self.split = split
+        self.split = "training" if mode == "train" else "validation"
         self.samples = []
         
         # 创建类别到索引的映射
