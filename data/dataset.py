@@ -72,8 +72,17 @@ class ADE20KDataset(Dataset):
     
     def _load_annotation(self, json_path: str) -> Dict:
         """加载标注文件"""
-        with open(json_path, 'r', encoding='utf-8') as f:
-            return json.load(f)
+        try:
+            with open(json_path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except UnicodeDecodeError:
+            try:
+                # 尝试其他编码
+                with open(json_path, 'r', encoding='latin-1') as f:
+                    return json.load(f)
+            except Exception:
+                # 如果仍然失败，返回空标注
+                return {'annotation': {'object': []}}
     
     def _create_mask(self, annotation: Dict, seg_image: np.ndarray) -> np.ndarray:
         """根据标注创建目标类别的掩码"""
@@ -131,6 +140,8 @@ class ADE20KDataset(Dataset):
             transformed = self.transform(image=image, mask=mask)
             image = transformed['image']
             mask = transformed['mask']
+            # 确保掩码是长整型
+            mask = mask.long()
         else:
             # 默认变换
             image = cv2.resize(image, self.image_size)
@@ -160,13 +171,13 @@ def get_transforms(image_size: Tuple[int, int] = (256, 256), mode: str = "train"
             A.GaussianBlur(blur_limit=(1, 3), p=0.3),
             A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
             ToTensorV2()
-        ])
+        ], additional_targets={'mask': 'mask'})
     else:  # val/test
         return A.Compose([
             A.Resize(image_size[0], image_size[1]),
             A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
             ToTensorV2()
-        ])
+        ], additional_targets={'mask': 'mask'})
 
 
 def create_dataloaders(
