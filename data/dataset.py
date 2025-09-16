@@ -90,37 +90,133 @@ class ADE20KDataset(Dataset):
                 return {'annotation': {'object': []}}
     
     def _create_mask(self, annotation: Dict, seg_image: np.ndarray) -> np.ndarray:
-        """根据标注创建目标类别的掩码"""
+        """根据标注创建目标类别的掩码 - 针对ADE20K复杂标注名称优化"""
         h, w = seg_image.shape[:2]
         mask = np.zeros((h, w), dtype=np.uint8)
-        
+
         # 获取标注中的所有对象
         objects = annotation.get('annotation', {}).get('object', [])
-        
+
+        # 基于分析结果创建精确的ADE20K标注名称映射
+        ade20k_name_to_target = {
+            # Person类别
+            'person, individual, someone, somebody, mortal, soul': 'person',
+            'person': 'person',
+            'individual': 'person',
+            'human': 'person',
+            'man': 'person',
+            'woman': 'person',
+            'child': 'person',
+            'people': 'person',
+            
+            # Sky类别  
+            'sky': 'sky',
+            
+            # Tree类别
+            'tree': 'tree',
+            'palm, palm tree': 'tree',
+            'palm tree': 'tree',
+            'palm': 'tree',
+            
+            # Rock类别
+            'rock, stone': 'rock',
+            'rock': 'rock',
+            'stone': 'rock',
+            'stones': 'rock',
+            'boulder': 'rock',
+            
+            # Bush类别
+            'shrub, bush': 'bush',
+            'bush': 'bush',
+            'shrub': 'bush',
+            'bushes': 'bush',
+            'ground shrubs': 'bush',
+            
+            # Grass类别
+            'grass': 'grass',
+            'lawn': 'grass',
+            'turf': 'grass',
+            
+            # Dog类别
+            'dog, domestic dog, canis familiaris': 'dog',
+            'dog': 'dog',
+            'dogs': 'dog',
+            'puppy': 'dog',
+            
+            # Cat类别
+            'cat': 'cat',
+            'cats': 'cat',
+            'kitten': 'cat',
+            
+            # Bird类别
+            'bird': 'bird',
+            'birds': 'bird',
+            
+            # Duck类别
+            'duck': 'duck',
+            'ducks': 'duck',
+            
+            # Clouds类别
+            'cloud': 'clouds',
+            'clouds': 'clouds',
+            
+            # Hill类别
+            'hill': 'hill',
+            'hills': 'hill',
+            'mound': 'hill',
+            
+            # Leaf类别
+            'leaf, leafage, foliage': 'leaf',
+            'leaf': 'leaf',
+            'leaves': 'leaf',
+            'foliage': 'leaf',
+            
+            # River类别
+            'river': 'river',
+            'stream': 'river',
+            'creek': 'river',
+            'brook': 'river',
+            
+            # Lake类别
+            'lake': 'lake',
+            'pond': 'lake',
+            'pond water': 'lake',
+            'reservoir': 'lake',
+            
+            # Flower类别
+            'flower': 'flower',
+            'flowers': 'flower',
+            'blossom': 'flower',
+            'bloom': 'flower',
+            'dried flowers': 'flower',
+        }
+
         for obj in objects:
-            obj_name = obj.get('name', '').lower()
+            obj_name = obj.get('name', '').strip()
+            if not obj_name:
+                continue
+
+            # 直接查找精确匹配
+            target_class = ade20k_name_to_target.get(obj_name)
             
-            # 检查是否是我们关心的类别
-            target_class = None
-            for target in self.target_classes[1:]:  # 跳过background
-                if target.lower() in obj_name or obj_name in target.lower():
-                    target_class = target
-                    break
-            
-            if target_class:
+            # 如果没有精确匹配，尝试小写匹配
+            if not target_class:
+                target_class = ade20k_name_to_target.get(obj_name.lower())
+
+            if target_class and target_class in self.class_to_idx:
                 class_idx = self.class_to_idx[target_class]
-                
+
                 # 获取多边形坐标
                 polygon = obj.get('polygon', {})
                 if 'x' in polygon and 'y' in polygon:
                     x_coords = polygon['x']
                     y_coords = polygon['y']
-                    
+
                     if len(x_coords) == len(y_coords) and len(x_coords) >= 3:
                         # 创建多边形掩码
                         points = np.array([[x, y] for x, y in zip(x_coords, y_coords)], dtype=np.int32)
                         cv2.fillPoly(mask, [points], class_idx)
-        
+
         return mask
     
     def __len__(self) -> int:
