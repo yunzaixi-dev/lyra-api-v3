@@ -24,13 +24,15 @@ class ADE20KDataset(Dataset):
         target_classes: List[str],
         transform: Optional[A.Compose] = None,
         image_size: Tuple[int, int] = (256, 256),
-        mode: str = "train"
+        mode: str = "train",
+        filter_empty_samples: bool = True
     ):
         self.data_dir = data_dir
         self.target_classes = target_classes
         self.transform = transform
         self.image_size = image_size
         self.split = "training" if mode == "train" else "validation"
+        self.filter_empty_samples = filter_empty_samples
         self.samples = []
         
         # 创建类别到索引的映射
@@ -39,14 +41,20 @@ class ADE20KDataset(Dataset):
         self._load_samples()
     
     def _load_samples(self):
-        """加载所有样本 - 适应ADE20K标准目录结构"""
+        """加载所有样本 - 适应ADE20K标准目录结构，可选择筛选空样本"""
         # ADE20K标准路径: ADE20K/images/ADE/training/
         ade_path = os.path.join(self.data_dir, "images", "ADE", self.split)
         
         if not os.path.exists(ade_path):
             print(f"警告: 路径不存在 {ade_path}")
             return
-            
+        
+        all_samples = []
+        valid_samples = []
+        processed_count = 0
+        
+        print(f"📋 开始加载 {self.split} 数据集...")
+        
         # 遍历所有场景类别目录
         for scene_type in os.listdir(ade_path):
             scene_path = os.path.join(ade_path, scene_type)
@@ -67,13 +75,124 @@ class ADE20KDataset(Dataset):
                         seg_path = os.path.join(scene_subdir_path, f"{base_name}_seg.png")
                         
                         if os.path.exists(json_path) and os.path.exists(seg_path):
-                            self.samples.append({
+                            sample = {
                                 'image_path': os.path.join(scene_subdir_path, file_name),
                                 'json_path': json_path,
                                 'seg_path': seg_path,
                                 'scene_class': scene_subdir,
                                 'scene_type': scene_type
-                            })
+                            }
+                            all_samples.append(sample)
+                            
+                            # 如果启用筛选，检查样本是否包含目标类别
+                            if self.filter_empty_samples:
+                                if self._sample_has_target_classes(sample):
+                                    valid_samples.append(sample)
+                            else:
+                                valid_samples.append(sample)
+                            
+                            processed_count += 1
+                            if processed_count % 1000 == 0:
+                                print(f"⏳ 已处理 {processed_count} 个样本...")
+        
+        # 根据筛选设置选择最终样本
+        self.samples = valid_samples
+        
+        # 输出统计信息
+        total_samples = len(all_samples)
+        valid_samples_count = len(valid_samples)
+        
+        print(f"✅ 数据加载完成:")
+        print(f"  📊 总样本数: {total_samples:,}")
+        if self.filter_empty_samples:
+            filtered_count = total_samples - valid_samples_count
+            filter_rate = (filtered_count / total_samples * 100) if total_samples > 0 else 0
+            print(f"  🔍 筛选后样本数: {valid_samples_count:,}")
+            print(f"  🗑️  过滤掉的空样本: {filtered_count:,} ({filter_rate:.1f}%)")
+        else:
+            print(f"  📝 使用所有样本: {valid_samples_count:,}")
+    
+    def _sample_has_target_classes(self, sample: dict) -> bool:
+        """检查样本是否包含目标类别"""
+        try:
+            # 加载标注文件
+            annotation = self._load_annotation(sample['json_path'])
+            objects = annotation.get('annotation', {}).get('object', [])
+            
+            # 使用与_create_mask相同的映射逻辑
+            ade20k_name_to_target = {
+                # Person类别
+                'person, individual, someone, somebody, mortal, soul': 'person',
+                'person': 'person', 'individual': 'person', 'human': 'person',
+                'man': 'person', 'woman': 'person', 'child': 'person', 'people': 'person',
+                
+                # Sky类别
+                'sky': 'sky',
+                
+                # Tree类别
+                'tree': 'tree', 'palm, palm tree': 'tree', 'palm tree': 'tree', 'palm': 'tree',
+                
+                # Rock类别
+                'rock, stone': 'rock', 'rock': 'rock', 'stone': 'rock', 'stones': 'rock', 'boulder': 'rock',
+                
+                # Bush类别
+                'shrub, bush': 'bush', 'bush': 'bush', 'shrub': 'bush', 'bushes': 'bush', 'ground shrubs': 'bush',
+                
+                # Grass类别
+                'grass': 'grass', 'lawn': 'grass', 'turf': 'grass',
+                
+                # Dog类别
+                'dog, domestic dog, canis familiaris': 'dog', 'dog': 'dog', 'dogs': 'dog', 'puppy': 'dog',
+                
+                # Cat类别
+                'cat': 'cat', 'cats': 'cat', 'kitten': 'cat',
+                
+                # Bird类别
+                'bird': 'bird', 'birds': 'bird',
+                
+                # Duck类别
+                'duck': 'duck', 'ducks': 'duck',
+                
+                # Clouds类别
+                'cloud': 'clouds', 'clouds': 'clouds',
+                
+                # Hill类别
+                'hill': 'hill', 'hills': 'hill', 'mound': 'hill',
+                
+                # Leaf类别
+                'leaf, leafage, foliage': 'leaf', 'leaf': 'leaf', 'leaves': 'leaf', 'foliage': 'leaf',
+                
+                # River类别
+                'river': 'river', 'stream': 'river', 'creek': 'river', 'brook': 'river',
+                
+                # Lake类别
+                'lake': 'lake', 'pond': 'lake', 'pond water': 'lake', 'reservoir': 'lake',
+                
+                # Flower类别
+                'flower': 'flower', 'flowers': 'flower', 'blossom': 'flower', 'bloom': 'flower', 'dried flowers': 'flower',
+            }
+            
+            # 检查是否有任何目标类别
+            for obj in objects:
+                obj_name = obj.get('name', '').strip()
+                if not obj_name:
+                    continue
+                
+                # 直接查找精确匹配
+                target_class = ade20k_name_to_target.get(obj_name)
+                
+                # 如果没有精确匹配，尝试小写匹配
+                if not target_class:
+                    target_class = ade20k_name_to_target.get(obj_name.lower())
+                
+                if target_class and target_class in self.class_to_idx:
+                    return True  # 找到至少一个目标类别
+            
+            return False  # 没有找到任何目标类别
+            
+        except Exception as e:
+            # 如果处理失败，保守地保留样本
+            return True
     
     def _load_annotation(self, json_path: str) -> Dict:
         """加载标注文件"""
