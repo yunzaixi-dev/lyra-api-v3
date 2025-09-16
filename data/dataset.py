@@ -26,49 +26,54 @@ class ADE20KDataset(Dataset):
         image_size: Tuple[int, int] = (256, 256),
         mode: str = "train"
     ):
-        """
-        Args:
-            data_dir: 数据根目录路径
-            target_classes: 目标类别列表
-            transform: 数据增强变换
-            image_size: 目标图像尺寸
-            mode: 数据模式 ('train', 'val', 'test')
-        """
         self.data_dir = data_dir
-        self.target_classes = ["background"] + target_classes  # 添加背景类
-        self.class_to_idx = {cls: idx for idx, cls in enumerate(self.target_classes)}
+        self.target_classes = target_classes
         self.transform = transform
         self.image_size = image_size
-        self.mode = mode
-        
-        # 收集所有样本
+        self.split = split
         self.samples = []
-        self._collect_samples()
         
-        print(f"找到 {len(self.samples)} 个样本")
-        print(f"目标类别: {self.target_classes}")
+        # 创建类别到索引的映射
+        self.class_to_idx = {cls: idx for idx, cls in enumerate(target_classes)}
+        
+        self._load_samples()
     
-    def _collect_samples(self):
-        """收集所有有效样本"""
-        for class_dir in os.listdir(self.data_dir):
-            class_path = os.path.join(self.data_dir, class_dir)
-            if not os.path.isdir(class_path):
+    def _load_samples(self):
+        """加载所有样本 - 适应ADE20K标准目录结构"""
+        # ADE20K标准路径: ADE20K/images/ADE/training/
+        ade_path = os.path.join(self.data_dir, "images", "ADE", self.split)
+        
+        if not os.path.exists(ade_path):
+            print(f"警告: 路径不存在 {ade_path}")
+            return
+            
+        # 遍历所有场景类别目录
+        for scene_type in os.listdir(ade_path):
+            scene_path = os.path.join(ade_path, scene_type)
+            if not os.path.isdir(scene_path):
                 continue
                 
-            for file_name in os.listdir(class_path):
-                if file_name.endswith('.jpg'):
-                    # 获取对应的标注文件
-                    base_name = file_name.replace('.jpg', '')
-                    json_path = os.path.join(class_path, f"{base_name}.json")
-                    seg_path = os.path.join(class_path, f"{base_name}_seg.png")
+            # 遍历每个场景下的具体场景
+            for scene_subdir in os.listdir(scene_path):
+                scene_subdir_path = os.path.join(scene_path, scene_subdir)
+                if not os.path.isdir(scene_subdir_path):
+                    continue
                     
-                    if os.path.exists(json_path) and os.path.exists(seg_path):
-                        self.samples.append({
-                            'image_path': os.path.join(class_path, file_name),
-                            'json_path': json_path,
-                            'seg_path': seg_path,
-                            'scene_class': class_dir
-                        })
+                # 加载该场景目录下的所有图片
+                for file_name in os.listdir(scene_subdir_path):
+                    if file_name.endswith('.jpg'):
+                        base_name = file_name.replace('.jpg', '')
+                        json_path = os.path.join(scene_subdir_path, f"{base_name}.json")
+                        seg_path = os.path.join(scene_subdir_path, f"{base_name}_seg.png")
+                        
+                        if os.path.exists(json_path) and os.path.exists(seg_path):
+                            self.samples.append({
+                                'image_path': os.path.join(scene_subdir_path, file_name),
+                                'json_path': json_path,
+                                'seg_path': seg_path,
+                                'scene_class': scene_subdir,
+                                'scene_type': scene_type
+                            })
     
     def _load_annotation(self, json_path: str) -> Dict:
         """加载标注文件"""
