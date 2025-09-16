@@ -1,4 +1,5 @@
 ADE20K/
+#outputs/
 *.pyc
 __pycache__/
 .venv/
